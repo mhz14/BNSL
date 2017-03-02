@@ -377,8 +377,6 @@ void randInitOrder(int * s) {
 	}
 }
 
-//----------Cuda�ں˺���-----------------------------------------------------------------------------
-// ������������÷�
 __global__ void calTopologyScore_kernel(double * dev_lsTable, int * dev_order,
 		double * dev_nodeScore, int * dev_bestParentSet, int parentSetNum,
 		int nodesNum) {
@@ -459,7 +457,6 @@ __global__ void calTopologyScore_kernel(double * dev_lsTable, int * dev_order,
 	}
 }
 
-// ����ֲ��÷�
 __device__ double calLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, int samplesNum, int size,
 		int* parentSet, int curNode, int nodesNum) {
@@ -505,7 +502,6 @@ __device__ double calLocalScore_kernel(int *dev_valuesRange,
 	return localScore;
 }
 
-// �������оֲ��÷�
 __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, double *dev_lsTable, int samplesNum,
 		int nodesNum, int parentSetNum) {
@@ -545,7 +541,6 @@ __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 	}
 }
 
-// ���������
 __device__ long C_kernel(int n, int m) {
 
 	if (n > m || n < 0 || m < 0)
@@ -558,7 +553,6 @@ __device__ long C_kernel(int n, int m) {
 	return res;
 }
 
-// �ָ�����㼯��
 __device__ void recoverComb_kernel(int curNode, int* combi, int size) {
 
 	for (int i = 0; i < size; i++) {
@@ -568,7 +562,6 @@ __device__ void recoverComb_kernel(int curNode, int* combi, int size) {
 	}
 }
 
-// ���Ҹ������
 __device__ void findComb_kernel(int nodesNum, int index, int* size,
 		int* combi) {
 
