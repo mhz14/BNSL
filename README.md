@@ -2,8 +2,11 @@
 Bayesian Network Structure Learning
 
 Score function: BDeu (Bayesian Dirichlet, likelihood-equivalence, uniform joint distribution)
+
 Search space: Orderings over the network variables
+
 Sample algorithm: Metropolis-Hasings
+
 paper reference: 
 A Learning Algorithm for Bayesian Networks and Its Efficient Implementation on GPUs.
 
