@@ -53,7 +53,6 @@ void CheckCudaError(cudaError_t err, char const* errMsg) {
 	if (err == cudaSuccess)
 		return;
 	printf("%s\nError Message: %s.\n", errMsg, cudaGetErrorString(err));
-	system("pause");
 	exit(EXIT_FAILURE);
 }
 
@@ -121,36 +120,38 @@ void BNSL_calLocalScore() {
 					samplesNum * nodesNum * sizeof(int),
 					cudaMemcpyHostToDevice),
 			"samplesValues -> dev_samplesValues failed.");
+	CUDA_CHECK_RETURN(cudaMemset(dev_N, 0, nodesNum * parentSetNum * PARENT_VALUE_MAX_NUM * sizeof(int)), "dev_N cudaMemset.");
+
+//	int blockNum = nodesNum * parentSetNum;
+//	blockNum = (blockNum - 1) / 256 + 1;
+	calAllLocalScore_kernel<<<1, 256>>>(dev_valuesRange,
+			dev_samplesValues, dev_N, dev_lsTable, samplesNum, nodesNum,
+			parentSetNum);
 	CUDA_CHECK_RETURN(cudaGetLastError(),
 			"calAllLocalScore_kernel launch failed.");
 	CUDA_CHECK_RETURN(cudaDeviceSynchronize(),
 			"calAllLocalScore_kernel failed on running.");
 
-	calAllLocalScore_kernel<<<1, 256>>>(dev_valuesRange, dev_samplesValues,
-			dev_N, dev_lsTable, samplesNum, nodesNum, parentSetNum);
-	CUDA_CHECK_RETURN(cudaGetLastError(),
-			"calAllLocalScore_kernel launch failed.");
-	CUDA_CHECK_RETURN(cudaDeviceSynchronize(),
-			"calAllLocalScore_kernel failed on running.");
-	/*
-	 double * lsTable = (double *)malloc(nodesNum * parentSetNum * sizeof(double));
-	 CUDA_CHECK_RETURN(cudaMemcpy(lsTable, dev_lsTable, nodesNum * parentSetNum * sizeof(double), cudaMemcpyDeviceToHost), "dev_lsTable -> lsTable");
-	 double sum = 0.0;
-	 for (int i = 0; i < nodesNum; i++){
-	 for (int j = 0; j < parentSetNum; j++){
-	 sum += lsTable[i * parentSetNum + j];
-	 }
-	 }
-	 printf("%f\n", sum);
-	 */
-	// �ͷ���GPU�з�����ڴ�ռ�
+//	double * lsTable = (double *) malloc(
+//			nodesNum * parentSetNum * sizeof(double));
+//	CUDA_CHECK_RETURN(
+//			cudaMemcpy(lsTable, dev_lsTable,
+//					nodesNum * parentSetNum * sizeof(double),
+//					cudaMemcpyDeviceToHost), "dev_lsTable -> lsTable");
+//	double sum = 0.0;
+//	for (int i = 0; i < nodesNum; i++) {
+//		for (int j = 0; j < parentSetNum; j++) {
+//			printf("%f\n", lsTable[i * parentSetNum + j]);
+//		}
+//	}
+//	free(lsTable);
+
 	CUDA_CHECK_RETURN(cudaFree(dev_valuesRange),
 			"dev_valuesRange cudaFree failed.");
 	CUDA_CHECK_RETURN(cudaFree(dev_samplesValues),
 			"dev_samplesValues cudaFree failed.");
 	CUDA_CHECK_RETURN(cudaFree(dev_N), "dev_N cudaFree failed.");
 
-	// ���մ���������ݵ��ڴ�
 	free(valuesRange);
 	free(samplesValues);
 }
@@ -505,40 +506,39 @@ __device__ double calLocalScore_kernel(int *dev_valuesRange,
 __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, double *dev_lsTable, int samplesNum,
 		int nodesNum, int parentSetNum) {
-	/*
-	 int id = blockIdx.x * blockDim.x + threadIdx.x;
-	 if (id < parentSetNum) {
-	 int size = 0;
-	 int combination[CONSTRAINTS], parentSet[CONSTRAINTS];
-	 findComb_kernel(nodesNum, id, &size, combination);
-	 int i, curNode;
-	 for (curNode = 0; curNode < nodesNum; curNode++) {
-	 for (i = 0; i < size; i++) {
-	 parentSet[i] = combination[i];
-	 }
-	 recoverComb_kernel(curNode, parentSet, size);
-	 dev_lsTable[curNode * parentSetNum + id] = calLocalScore_kernel(
-	 dev_valuesRange, dev_samplesValues, dev_N, samplesNum, size,
-	 parentSet, curNode, nodesNum);
-	 //dev_lsTable[id * nodesNum + curNode] = -1.0;
-	 }
-	 }
-	 */
 
-	if (threadIdx.x < parentSetNum) {
-		int curNode = blockIdx.x;
-		int index = threadIdx.x;
-		int parentSet[CONSTRAINTS];
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id < parentSetNum) {
 		int size = 0;
-
-		findComb_kernel(nodesNum, index, &size, parentSet);
-
-		recoverComb_kernel(curNode, parentSet, size);
-
-		dev_lsTable[curNode * parentSetNum + index] = calLocalScore_kernel(
-				dev_valuesRange, dev_samplesValues, dev_N, samplesNum, size,
-				parentSet, curNode, nodesNum);
+		int combination[CONSTRAINTS], parentSet[CONSTRAINTS];
+		findComb_kernel(nodesNum, id, &size, combination);
+		int i, curNode;
+		for (curNode = 0; curNode < nodesNum; curNode++) {
+			for (i = 0; i < size; i++) {
+				parentSet[i] = combination[i];
+			}
+			recoverComb_kernel(curNode, parentSet, size);
+			double result  = calLocalScore_kernel(
+					dev_valuesRange, dev_samplesValues, dev_N, samplesNum, size,
+					parentSet, curNode, nodesNum);
+			dev_lsTable[curNode * parentSetNum + id] = result;
+		}
 	}
+
+//	if (threadIdx.x < parentSetNum) {
+//		int curNode = blockIdx.x;
+//		int index = threadIdx.x;
+//		int parentSet[CONSTRAINTS];
+//		int size = 0;
+//
+//		findComb_kernel(nodesNum, index, &size, parentSet);
+//
+//		recoverComb_kernel(curNode, parentSet, size);
+//
+//		dev_lsTable[curNode * parentSetNum + index] = calLocalScore_kernel(
+//				dev_valuesRange, dev_samplesValues, dev_N, samplesNum, size,
+//				parentSet, curNode, nodesNum);
+//	}
 }
 
 __device__ long C_kernel(int n, int m) {
