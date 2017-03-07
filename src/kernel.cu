@@ -8,7 +8,7 @@ int * samplesValues;
 
 int samplesNum;
 
-int parentSetNum;
+int allParentSetNumPerNode;
 
 double * dev_lsTable;
 
@@ -17,18 +17,20 @@ int* topSort;
 double globalBestScore;
 
 int begin = 0;
-cudaEvent_t start, stop;
 
 int main() {
-	calcTime_start(2);
+	calcCPUTimeStart("init.");
 	BNSL_init();
-	calcTime_end(2);
-	calcTime_start(2);
-	BNSL_calLocalScore();
-	calcTime_end(2);
-	calcTime_start(2);
+	calcCPUTimeEnd();
+
+	calcCPUTimeStart("calcLS.");
+	BNSL_calcLocalScore();
+	calcCPUTimeEnd();
+
+	calcCPUTimeStart("start.");
 	BNSL_start();
-	calcTime_end(2);
+	calcCPUTimeEnd();
+
 	printf("Bayesian Network learned:\n");
 	for (int i = 0; i < nodesNum; i++) {
 		for (int j = 0; j < nodesNum; j++) {
@@ -43,9 +45,10 @@ int main() {
 	}
 	printf("\n");
 
-	calcTime_start(2);
+	calcCPUTimeStart("finish.");
 	BNSL_finish();
-	calcTime_end(2);
+	calcCPUTimeEnd();
+
 	return 0;
 }
 
@@ -56,28 +59,13 @@ void CheckCudaError(cudaError_t err, char const* errMsg) {
 	exit(EXIT_FAILURE);
 }
 
-void calcTime_start(int type) {
-	if (type == 1) {
-		cudaEventCreate(&start);
-		cudaEventCreate(&stop);
-		cudaEventRecord(start, NULL);
-	} else {
-		begin = clock();
-	}
+void calcCPUTimeStart(char const *message) {
+	begin = clock();
+	printf("%s", message);
 }
 
-void calcTime_end(int type) {
-	if (type == 1) {
-		float time = 0;
-		cudaEventRecord(stop, NULL);
-		cudaEventSynchronize(stop);
-		cudaEventElapsedTime(&time, start, stop);
-		cudaEventDestroy(start);
-		cudaEventDestroy(stop);
-		printf("Elapsed time is %fms\n", time);
-	} else {
-		printf("Elapsed time is %dms\n", (int) clock() - begin);
-	}
+void calcCPUTimeEnd() {
+	printf("Elapsed CPU time is %dms\n", (clock() - begin) / 1000);
 }
 
 void BNSL_init() {
@@ -85,22 +73,25 @@ void BNSL_init() {
 	readSamples();
 }
 
-void BNSL_calLocalScore() {
+void BNSL_calcLocalScore() {
 
 	int i;
-	parentSetNum = 0;
+	allParentSetNumPerNode = 0;
 	for (i = 0; i <= CONSTRAINTS; i++) {
-		parentSetNum = parentSetNum + C(i, nodesNum - 1);
+		allParentSetNumPerNode = allParentSetNumPerNode + C(i, nodesNum - 1);
 	}
 
 	int* dev_valuesRange;
 	int* dev_samplesValues;
 	int* dev_N;
 
-	CUDA_CHECK_RETURN(cudaDeviceReset(), "reset error.");
+	// calculate max different values number for all pair of child and parent set
+	int valuesMaxNum = calcValuesMaxNum();
 
+	// malloc in GPU global mem.
 	CUDA_CHECK_RETURN(
-			cudaMalloc(&dev_lsTable, nodesNum * parentSetNum * sizeof(double)),
+			cudaMalloc(&dev_lsTable,
+					nodesNum * allParentSetNumPerNode * sizeof(double)),
 			"dev_lsTable cudaMalloc failed.");
 	CUDA_CHECK_RETURN(cudaMalloc(&dev_valuesRange, nodesNum * sizeof(int)),
 			"dev_valuesRange cudaMalloc failed.");
@@ -108,9 +99,11 @@ void BNSL_calLocalScore() {
 			cudaMalloc(&dev_samplesValues, samplesNum * nodesNum * sizeof(int)),
 			"dev_samplesValues cudaMalloc failed.");
 	CUDA_CHECK_RETURN(
-			cudaMalloc(&dev_N, parentSetNum * PARENT_VALUE_MAX_NUM * sizeof(int)),
+			cudaMalloc(&dev_N,
+					allParentSetNumPerNode * valuesMaxNum * sizeof(int)),
 			"dev_N cudaMalloc failed.");
 
+	// copy data from CPU mem to GPU mem.
 	CUDA_CHECK_RETURN(
 			cudaMemcpy(dev_valuesRange, valuesRange, nodesNum * sizeof(int),
 					cudaMemcpyHostToDevice),
@@ -121,15 +114,14 @@ void BNSL_calLocalScore() {
 					cudaMemcpyHostToDevice),
 			"samplesValues -> dev_samplesValues failed.");
 	CUDA_CHECK_RETURN(
-			cudaMemset(dev_N, 0, parentSetNum * PARENT_VALUE_MAX_NUM * sizeof(int)),
-			"dev_N cudaMemset.");
+			cudaMemset(dev_N, 0,
+					allParentSetNumPerNode * valuesMaxNum * sizeof(int)),
+			"dev_N cudaMemset failed.");
 
-	int blockNum = (parentSetNum + 1) / 256 + 1;
+	int blockNum = (allParentSetNumPerNode + 1) / 256 + 1;
 	calAllLocalScore_kernel<<<blockNum, 256>>>(dev_valuesRange,
 			dev_samplesValues, dev_N, dev_lsTable, samplesNum, nodesNum,
-			parentSetNum);
-	CUDA_CHECK_RETURN(cudaGetLastError(),
-			"calAllLocalScore_kernel launch failed.");
+			allParentSetNumPerNode, valuesMaxNum);
 	CUDA_CHECK_RETURN(cudaDeviceSynchronize(),
 			"calAllLocalScore_kernel failed on running.");
 
@@ -144,14 +136,11 @@ void BNSL_calLocalScore() {
 }
 
 void BNSL_start() {
-	int i, j, swap, r1, r2, iter;
-	double oldScore = -DBL_MAX;
+	int i, j, iter, offset;
+	double oldScore = -DBL_MAX, newScore = 0.0;
 	globalBestScore = -DBL_MAX;
 	globalBestGraph = (int *) malloc(sizeof(int) * nodesNum * nodesNum);
-
 	topSort = (int *) malloc(sizeof(int) * nodesNum);
-
-	double newScore = 0.0;
 
 	double * nodeScore = (double *) malloc(nodesNum * sizeof(double));
 	int * bestParentSet = (int *) malloc(
@@ -169,53 +158,29 @@ void BNSL_start() {
 			cudaMalloc(&dev_bestParentSet, nodesNum * (CONSTRAINTS + 1) * sizeof(int)),
 			"dev_bestParentSet cudaMalloc failed.");
 
-	int * oldOrder = (int *) malloc(sizeof(int) * nodesNum);
-	randInitOrder(oldOrder);
-
 	int * newOrder = (int *) malloc(sizeof(int) * nodesNum);
+	randInitOrder(newOrder);
+	int * oldOrder = (int *) malloc(sizeof(int) * nodesNum);
 
 	int maxIterNum = 1;
 	for (iter = 0; iter < maxIterNum; iter++) {
-		for (i = 0; i < nodesNum; i++) {
-			newOrder[i] = oldOrder[i];
-		}
-		r1 = rand() % nodesNum;
-		if (r1 == nodesNum - 1) {
-			r2 = rand() % (nodesNum - 1);
-			swap = newOrder[r1];
-			newOrder[r1] = newOrder[r2];
-			newOrder[r2] = swap;
-		} else {
-			swap = newOrder[r1];
-			newOrder[r1] = newOrder[nodesNum - 1];
-			newOrder[nodesNum - 1] = swap;
 
-			r2 = rand() % (nodesNum - 1);
-			if (r1 != r2) {
-				swap = newOrder[r1];
-				newOrder[r1] = newOrder[r2];
-				newOrder[r2] = swap;
-
-				swap = newOrder[r2];
-				newOrder[r2] = newOrder[nodesNum - 1];
-				newOrder[nodesNum - 1] = swap;
-			}
-		}
-
-		newScore = 0.0;
+		//randSwapTwoNode(newOrder);
+		newOrder[0] = 1;
+		newOrder[1] = 2;
+		newOrder[2] = 3;
+		newOrder[3] = 4;
+		newOrder[4] = 5;
 
 		CUDA_CHECK_RETURN(
 				cudaMemcpy(dev_order, newOrder, nodesNum * sizeof(int),
 						cudaMemcpyHostToDevice),
 				"newOrder -> dev_order failed.");
 
-		dim3 blockNum(nodesNum);
-		dim3 threadNumInBlock(256);
-		size_t dynamicSharedMemory = 256 * 8;
-
-		calTopologyScore_kernel<<<blockNum, threadNumInBlock,
-				dynamicSharedMemory>>>(dev_lsTable, dev_order, dev_nodeScore,
-				dev_bestParentSet, parentSetNum, nodesNum);
+		// use GPU to calculate order score
+		calOrderScore_kernel<<<nodesNum, 256, 256 * 8>>>(dev_lsTable, dev_order,
+				dev_nodeScore, dev_bestParentSet, allParentSetNumPerNode,
+				nodesNum);
 
 		CUDA_CHECK_RETURN(
 				cudaMemcpy(nodeScore, dev_nodeScore, nodesNum * sizeof(double),
@@ -225,34 +190,33 @@ void BNSL_start() {
 				cudaMemcpy(bestParentSet, dev_bestParentSet, nodesNum * (CONSTRAINTS + 1) * sizeof(int), cudaMemcpyDeviceToHost),
 				"dev_bestParentSet -> bestParentSet failed.");
 
+		newScore = 0.0;
 		for (i = 0; i < nodesNum; i++) {
 			newScore += nodeScore[i];
 		}
 
+		// use Metropolis-Hastings rule
 		srand((unsigned int) time(NULL));
 		double u = rand() / (double) RAND_MAX;
 		if (log(u) < newScore - oldScore) {
 			oldScore = newScore;
-			for (j = 0; j < nodesNum; j++) {
-				oldOrder[j] = newOrder[j];
-			}
+			memcpy(oldOrder, newOrder, nodesNum * sizeof(int));
 		}
+
+		// search for best graph
 		if (newScore > globalBestScore) {
 			globalBestScore = newScore;
+			memset(globalBestGraph, 0, nodesNum * nodesNum * sizeof(int));
+
 			for (i = 0; i < nodesNum; i++) {
-				for (j = 0; j < nodesNum; j++) {
-					globalBestGraph[i * nodesNum + j] = 0;
+				for (j = 1, offset = i * (CONSTRAINTS + 1);
+						j <= bestParentSet[offset]; j++) {
+					globalBestGraph[(bestParentSet[offset + j] - 1) * nodesNum
+							+ i] = 1;
 				}
 			}
-			for (i = 0; i < nodesNum; i++) {
-				for (j = 0; j < bestParentSet[i * (CONSTRAINTS + 1)]; j++) {
-					globalBestGraph[(bestParentSet[i * (CONSTRAINTS + 1) + j + 1]
-							- 1) * nodesNum + i] = 1;
-				}
-			}
-			for (i = 0; i < nodesNum; i++) {
-				topSort[i] = newOrder[i];
-			}
+
+			memcpy(topSort, newOrder, nodesNum * sizeof(int));
 		}
 	}
 
@@ -320,6 +284,10 @@ void readSamples() {
 	fclose(inFile);
 }
 
+int compare(const void*a, const void*b) {
+	return *(int*) a - *(int*) b;
+}
+
 long C(int n, int m) {
 
 	if (n > m || n < 0 || m < 0)
@@ -346,16 +314,47 @@ void randInitOrder(int * s) {
 	}
 }
 
-__global__ void calTopologyScore_kernel(double * dev_lsTable, int * dev_order,
+void selectTwoNodeToSwap(int *n1, int *n2) {
+	*n1 = rand() % nodesNum;
+	*n2 = rand() % nodesNum;
+	if (*n1 == *n2) {
+		*n2 = rand() % (nodesNum - 1);
+		if (*n2 >= *n1) {
+			*n2++;
+		}
+	}
+}
+
+void randSwapTwoNode(int *order) {
+	int n1 = 0, n2 = 0, temp;
+	selectTwoNodeToSwap(&n1, &n2);
+	temp = order[n1];
+	order[n1] = order[n2];
+	order[n2] = temp;
+}
+
+int calcValuesMaxNum() {
+	int * valuesRangeToSort = (int *) malloc(nodesNum * sizeof(int));
+	memcpy(valuesRangeToSort, valuesRange, nodesNum * sizeof(int));
+	qsort(valuesRangeToSort, nodesNum, sizeof(int), compare);
+	int valuesMaxNum = 1;
+	for (int i = nodesNum - CONSTRAINTS - 1; i < nodesNum; i++) {
+		valuesMaxNum *= valuesRangeToSort[i];
+	}
+	free(valuesRangeToSort);
+	return valuesMaxNum;
+}
+
+__global__ void calOrderScore_kernel(double * dev_lsTable, int * dev_order,
 		double * dev_nodeScore, int * dev_bestParentSet, int parentSetNum,
 		int nodesNum) {
 
-	int parentSetNumInBlock = 0;
+	int parentSetNumInOrder = 0;
 	int i, s;
 	int curPos = blockIdx.x;
 	int curNode = dev_order[curPos];
 	for (i = 0; i <= CONSTRAINTS && i < curPos + 1; i++) {
-		parentSetNumInBlock += C_kernel(i, curPos);
+		parentSetNumInOrder += C_kernel(i, curPos);
 	}
 
 	extern __shared__ double result[];
@@ -363,7 +362,7 @@ __global__ void calTopologyScore_kernel(double * dev_lsTable, int * dev_order,
 	__syncthreads();
 	int combi[CONSTRAINTS];
 	int size = 0;
-	if (threadIdx.x < parentSetNumInBlock) {
+	if (threadIdx.x < parentSetNumInOrder) {
 		findComb_kernel(curPos + 1, threadIdx.x, &size, combi);
 
 		int parentSet[CONSTRAINTS];
@@ -428,7 +427,7 @@ __global__ void calTopologyScore_kernel(double * dev_lsTable, int * dev_order,
 
 __device__ double calLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, int samplesNum, int size,
-		int* parentSet, int curNode, int nodesNum) {
+		int* parentSet, int curNode, int nodesNum, int valuesMaxNum) {
 
 	int curNodeValuesNum = dev_valuesRange[curNode];
 	int valuesNum = 1;
@@ -437,8 +436,10 @@ __device__ double calLocalScore_kernel(int *dev_valuesRange,
 		valuesNum = valuesNum * dev_valuesRange[parentSet[i] - 1];
 	}
 
-	int *N = dev_N
-			+ (blockIdx.x * blockDim.x + threadIdx.x) * PARENT_VALUE_MAX_NUM;
+	int *N = dev_N + (blockIdx.x * blockDim.x + threadIdx.x) * valuesMaxNum;
+	for (i = 0; i < valuesMaxNum; i++) {
+		N[i] = 0;
+	}
 	int pvalueIndex = 0;
 	for (i = 0; i < samplesNum; i++) {
 		pvalueIndex = 0;
@@ -472,7 +473,7 @@ __device__ double calLocalScore_kernel(int *dev_valuesRange,
 
 __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, double *dev_lsTable, int samplesNum,
-		int nodesNum, int parentSetNum) {
+		int nodesNum, int parentSetNum, int valuesMaxNum) {
 
 	int id = blockIdx.x * blockDim.x + threadIdx.x;
 	if (id < parentSetNum) {
@@ -487,7 +488,7 @@ __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 			recoverComb_kernel(curNode, parentSet, size);
 			double result = calLocalScore_kernel(dev_valuesRange,
 					dev_samplesValues, dev_N, samplesNum, size, parentSet,
-					curNode, nodesNum);
+					curNode, nodesNum, valuesMaxNum);
 			dev_lsTable[curNode * parentSetNum + id] = result;
 		}
 	}
@@ -557,17 +558,19 @@ __device__ void sortArray_kernel(int * s, int n) {
 	int min;
 	int id = -1;
 	for (int i = 0; i < n - 1; i++) {
-		min = INT_MAX;
-		id = -1;
-		for (int j = i; j < n; j++) {
+		min = s[i];
+		id = i;
+		for (int j = i + 1; j < n; j++) {
 			if (s[j] < min) {
 				min = s[j];
 				id = j;
 			}
 		}
-		int swap = s[i];
-		s[i] = s[id];
-		s[id] = swap;
+		if (i != id) {
+			int swap = s[i];
+			s[i] = s[id];
+			s[id] = swap;
+		}
 	}
 }
 
