@@ -5,7 +5,7 @@ Score function: BDeu (Bayesian Dirichlet, likelihood-equivalence, uniform joint 
 
 Search space: Orderings over the network variables
 
-Sample algorithm: Metropolis-Hasings
+Sample algorithm: Metropolis-Hastings
 
 paper reference: 
 A Learning Algorithm for Bayesian Networks and Its Efficient Implementation on GPUs.
