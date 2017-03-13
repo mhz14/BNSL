@@ -346,7 +346,7 @@ int calcValuesMaxNum() {
 }
 
 __global__ void calOrderScore_kernel(double * dev_lsTable, int * dev_order,
-		double * dev_nodeScore, int * dev_bestParentSet, int parentSetNum,
+		double * dev_nodeScore, int * dev_bestParentSet, int allParentSetNumPerNode,
 		int nodesNum) {
 
 	int parentSetNumInOrder = 0;
@@ -383,7 +383,7 @@ __global__ void calOrderScore_kernel(double * dev_lsTable, int * dev_order,
 			index = findIndex_kernel(size, parentSet, nodesNum);
 		}
 
-		result[threadIdx.x] = dev_lsTable[(curNode - 1) * parentSetNum + index];
+		result[threadIdx.x] = dev_lsTable[(curNode - 1) * allParentSetNumPerNode + index];
 	}
 
 	__syncthreads();
@@ -473,10 +473,10 @@ __device__ double calLocalScore_kernel(int *dev_valuesRange,
 
 __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, double *dev_lsTable, int samplesNum,
-		int nodesNum, int parentSetNum, int valuesMaxNum) {
+		int nodesNum, int allParentSetNumPerNode, int valuesMaxNum) {
 
 	int id = blockIdx.x * blockDim.x + threadIdx.x;
-	if (id < parentSetNum) {
+	if (id < allParentSetNumPerNode) {
 		int size = 0;
 		int combination[CONSTRAINTS], parentSet[CONSTRAINTS];
 		findComb_kernel(nodesNum, id, &size, combination);
@@ -489,7 +489,7 @@ __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 			double result = calLocalScore_kernel(dev_valuesRange,
 					dev_samplesValues, dev_N, samplesNum, size, parentSet,
 					curNode, nodesNum, valuesMaxNum);
-			dev_lsTable[curNode * parentSetNum + id] = result;
+			dev_lsTable[curNode * allParentSetNumPerNode + id] = result;
 		}
 	}
 }

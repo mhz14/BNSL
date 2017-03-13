@@ -29,10 +29,10 @@ __device__ double calLocalScore_kernel(int * dev_valuesRange,
 
 __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, double * dev_lsTable,
-		int samplesNum, int nodesNum, int parentSetNum, int valuesMaxNum);
+		int samplesNum, int nodesNum, int allParentSetNumPerNode, int valuesMaxNum);
 
 __global__ void calOrderScore_kernel(double * dev_lsTable, int * dev_order,
-		double * dev_nodeScore, int * dev_bestParentSet, int parentSetNum,
+		double * dev_nodeScore, int * dev_bestParentSet, int allParentSetNumPerNode,
 		int nodesNum);
 
 __device__ void sortArray_kernel(int * s, int n);
