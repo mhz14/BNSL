@@ -9,11 +9,11 @@
 void CheckCudaError(cudaError_t err, char const* errMsg);
 #define CUDA_CHECK_RETURN(value1, value2) CheckCudaError(value1, value2)
 
-#define SAMPLES_PATH "data/burglar.sample"
-#define NODEINFO_PATH "data/burglar.info"
+#define SAMPLES_PATH "data/alarm.sample"
+#define NODEINFO_PATH "data/alarm.info"
 #define ALPHA 10.0
 #define GAMMA 0.2
-#define CONSTRAINTS 2
+#define CONSTRAINTS 4
 
 __device__ int findIndex_kernel(int k, int* combi, int nodesNum);
 

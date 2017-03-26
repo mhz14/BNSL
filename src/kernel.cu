@@ -19,6 +19,7 @@ double globalBestScore;
 int begin = 0;
 
 int main() {
+
 	calcCPUTimeStart("init.");
 	BNSL_init();
 	calcCPUTimeEnd();
