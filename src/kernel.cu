@@ -1,4 +1,4 @@
-#include "BNSL_GPU.cuh"
+#include "BNSL_BASE.cuh"
 
 int * valuesRange;
 
@@ -120,7 +120,7 @@ void BNSL_calcLocalScore() {
 			"dev_N cudaMemset failed.");
 
 	int blockNum = (allParentSetNumPerNode + 1) / 256 + 1;
-	calAllLocalScore_kernel<<<blockNum, 256>>>(dev_valuesRange,
+	calcAllLocalScore_kernel<<<blockNum, 256>>>(dev_valuesRange,
 			dev_samplesValues, dev_N, dev_lsTable, samplesNum, nodesNum,
 			allParentSetNumPerNode, valuesMaxNum);
 	CUDA_CHECK_RETURN(cudaDeviceSynchronize(),
@@ -179,7 +179,7 @@ void BNSL_start() {
 				"newOrder -> dev_order failed.");
 
 		// use GPU to calculate order score
-		calOrderScore_kernel<<<nodesNum, 256, 256 * 8>>>(dev_lsTable, dev_order,
+		calcOrderScore_kernel<<<nodesNum, 256, 256 * 8>>>(dev_lsTable, dev_order,
 				dev_nodeScore, dev_bestParentSet, allParentSetNumPerNode,
 				nodesNum);
 
@@ -346,7 +346,7 @@ int calcValuesMaxNum() {
 	return valuesMaxNum;
 }
 
-__global__ void calOrderScore_kernel(double * dev_lsTable, int * dev_order,
+__global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
 		double * dev_nodeScore, int * dev_bestParentSet, int allParentSetNumPerNode,
 		int nodesNum) {
 
@@ -426,7 +426,7 @@ __global__ void calOrderScore_kernel(double * dev_lsTable, int * dev_order,
 	}
 }
 
-__device__ double calLocalScore_kernel(int *dev_valuesRange,
+__device__ double calcLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, int samplesNum, int size,
 		int* parentSet, int curNode, int nodesNum, int valuesMaxNum) {
 
@@ -472,7 +472,7 @@ __device__ double calLocalScore_kernel(int *dev_valuesRange,
 	return localScore;
 }
 
-__global__ void calAllLocalScore_kernel(int *dev_valuesRange,
+__global__ void calcAllLocalScore_kernel(int *dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, double *dev_lsTable, int samplesNum,
 		int nodesNum, int allParentSetNumPerNode, int valuesMaxNum) {
 
@@ -487,7 +487,7 @@ __global__ void calAllLocalScore_kernel(int *dev_valuesRange,
 				parentSet[i] = combination[i];
 			}
 			recoverComb_kernel(curNode, parentSet, size);
-			double result = calLocalScore_kernel(dev_valuesRange,
+			double result = calcLocalScore_kernel(dev_valuesRange,
 					dev_samplesValues, dev_N, samplesNum, size, parentSet,
 					curNode, nodesNum, valuesMaxNum);
 			dev_lsTable[curNode * allParentSetNumPerNode + id] = result;
