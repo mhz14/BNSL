@@ -20,15 +20,15 @@ int begin = 0;
 
 int main() {
 
-	calcCPUTimeStart("init.");
+	calcCPUTimeStart("BNSL_init:");
 	BNSL_init();
 	calcCPUTimeEnd();
 
-	calcCPUTimeStart("calcLS.");
+	calcCPUTimeStart("BNSL_calcLocalScore:");
 	BNSL_calcLocalScore();
 	calcCPUTimeEnd();
 
-	calcCPUTimeStart("start.");
+	calcCPUTimeStart("BNSL_start:");
 	BNSL_start();
 	calcCPUTimeEnd();
 
@@ -46,7 +46,7 @@ int main() {
 	}
 	printf("\n");
 
-	calcCPUTimeStart("finish.");
+	calcCPUTimeStart("BNSL_finish:");
 	BNSL_finish();
 	calcCPUTimeEnd();
 
@@ -62,7 +62,7 @@ void CheckCudaError(cudaError_t err, char const* errMsg) {
 
 void calcCPUTimeStart(char const *message) {
 	begin = clock();
-	printf("%s", message);
+	printf("%s\n", message);
 }
 
 void calcCPUTimeEnd() {
@@ -119,8 +119,9 @@ void BNSL_calcLocalScore() {
 					allParentSetNumPerNode * valuesMaxNum * sizeof(int)),
 			"dev_N cudaMemset failed.");
 
-	int blockNum = (allParentSetNumPerNode + 1) / 256 + 1;
-	calcAllLocalScore_kernel<<<blockNum, 256>>>(dev_valuesRange,
+	int threadNum = 256;
+	int blockNum = (allParentSetNumPerNode + 1) / threadNum + 1;
+	calcAllLocalScore_kernel<<<blockNum, threadNum>>>(dev_valuesRange,
 			dev_samplesValues, dev_N, dev_lsTable, samplesNum, nodesNum,
 			allParentSetNumPerNode, valuesMaxNum);
 	CUDA_CHECK_RETURN(cudaDeviceSynchronize(),
