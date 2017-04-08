@@ -32,19 +32,9 @@ int main() {
 	BNSL_start();
 	calcCPUTimeEnd();
 
-	printf("Bayesian Network learned:\n");
-	for (int i = 0; i < nodesNum; i++) {
-		for (int j = 0; j < nodesNum; j++) {
-			printf("%d ", globalBestGraph[i * nodesNum + j]);
-		}
-		printf("\n");
-	}
-	printf("Best Score: %f \n", globalBestScore);
-	printf("Best Topology: ");
-	for (int i = 0; i < nodesNum; i++) {
-		printf("%d ", topSort[i]);
-	}
-	printf("\n");
+	calcCPUTimeStart("BNSL_printResult:");
+	BNSL_printResult();
+	calcCPUTimeEnd();
 
 	calcCPUTimeStart("BNSL_finish:");
 	BNSL_finish();
@@ -53,28 +43,28 @@ int main() {
 	return 0;
 }
 
-void CheckCudaError(cudaError_t err, char const* errMsg) {
+__host__ void CheckCudaError(cudaError_t err, char const* errMsg) {
 	if (err == cudaSuccess)
 		return;
 	printf("%s\nError Message: %s.\n", errMsg, cudaGetErrorString(err));
 	exit(EXIT_FAILURE);
 }
 
-void calcCPUTimeStart(char const *message) {
+__host__ void calcCPUTimeStart(char const *message) {
 	begin = clock();
 	printf("%s\n", message);
 }
 
-void calcCPUTimeEnd() {
+__host__ void calcCPUTimeEnd() {
 	printf("Elapsed CPU time is %dms\n", (clock() - begin) / 1000);
 }
 
-void BNSL_init() {
+__host__ void BNSL_init() {
 	readNodeInfo();
 	readSamples();
 }
 
-void BNSL_calcLocalScore() {
+__host__ void BNSL_calcLocalScore() {
 
 	int i;
 	allParentSetNumPerNode = 0;
@@ -121,6 +111,9 @@ void BNSL_calcLocalScore() {
 
 	int threadNum = 256;
 	int blockNum = (allParentSetNumPerNode + 1) / threadNum + 1;
+	printf(
+			"calculate all local score. allParentSetNumPerNode = %d, blockNum = %d, threadNum = %d.\n",
+			allParentSetNumPerNode, blockNum, threadNum);
 	calcAllLocalScore_kernel<<<blockNum, threadNum>>>(dev_valuesRange,
 			dev_samplesValues, dev_N, dev_lsTable, samplesNum, nodesNum,
 			allParentSetNumPerNode, valuesMaxNum);
@@ -137,82 +130,117 @@ void BNSL_calcLocalScore() {
 	free(samplesValues);
 }
 
-void BNSL_start() {
-	int i, j, iter, offset;
+__host__ void BNSL_start() {
+	int i, j, iter, offset, size;
 	double oldScore = -DBL_MAX, newScore = 0.0;
 	globalBestScore = -DBL_MAX;
 	globalBestGraph = (int *) malloc(sizeof(int) * nodesNum * nodesNum);
 	topSort = (int *) malloc(sizeof(int) * nodesNum);
 
-	double * nodeScore = (double *) malloc(nodesNum * sizeof(double));
+	double * bestNodeScore = (double *) malloc(nodesNum * sizeof(double));
 	int * bestParentSet = (int *) malloc(
 			(CONSTRAINTS + 1) * nodesNum * sizeof(int));
 
-	int * dev_order;
-	int * dev_bestParentSet;
-	double * dev_nodeScore;
+	double *nodeScore = (double *) malloc(1024 * sizeof(double));
+
+	int *dev_order;
+	double *dev_nodeScore;
+	int *dev_parentSet;
 
 	CUDA_CHECK_RETURN(cudaMalloc(&dev_order, nodesNum * sizeof(int)),
 			"dev_order cudaMalloc failed.");
-	CUDA_CHECK_RETURN(cudaMalloc(&dev_nodeScore, nodesNum * sizeof(double)),
+	CUDA_CHECK_RETURN(cudaMalloc(&dev_nodeScore, 1024 * sizeof(double)),
 			"dev_nodeScore cudaMalloc failed.");
 	CUDA_CHECK_RETURN(
-			cudaMalloc(&dev_bestParentSet, nodesNum * (CONSTRAINTS + 1) * sizeof(int)),
+			cudaMalloc(&dev_parentSet, 1024 * (CONSTRAINTS + 1) * sizeof(int)),
 			"dev_bestParentSet cudaMalloc failed.");
 
 	int * newOrder = (int *) malloc(sizeof(int) * nodesNum);
 	randInitOrder(newOrder);
 	int * oldOrder = (int *) malloc(sizeof(int) * nodesNum);
 
-	int maxIterNum = 1;
-	for (iter = 0; iter < maxIterNum; iter++) {
+	int maxIterNum = 10000;
+	for (iter = 1; iter <= maxIterNum; iter++) {
+		printf("iter = %d: \n", iter);
 
-		//randSwapTwoNode(newOrder);
-		newOrder[0] = 1;
-		newOrder[1] = 2;
-		newOrder[2] = 3;
-		newOrder[3] = 4;
-		newOrder[4] = 5;
+		randSwapTwoNode(newOrder);
 
 		CUDA_CHECK_RETURN(
 				cudaMemcpy(dev_order, newOrder, nodesNum * sizeof(int),
 						cudaMemcpyHostToDevice),
 				"newOrder -> dev_order failed.");
 
-		// use GPU to calculate order score
-		calcOrderScore_kernel<<<nodesNum, 256, 256 * 8>>>(dev_lsTable, dev_order,
-				dev_nodeScore, dev_bestParentSet, allParentSetNumPerNode,
-				nodesNum);
-
-		CUDA_CHECK_RETURN(
-				cudaMemcpy(nodeScore, dev_nodeScore, nodesNum * sizeof(double),
-						cudaMemcpyDeviceToHost),
-				"dev_nodeScore -> nodeScore failed.");
-		CUDA_CHECK_RETURN(
-				cudaMemcpy(bestParentSet, dev_bestParentSet, nodesNum * (CONSTRAINTS + 1) * sizeof(int), cudaMemcpyDeviceToHost),
-				"dev_bestParentSet -> bestParentSet failed.");
-
-		newScore = 0.0;
+		// use GPU to calculate best parent set for each node
+		int parentSetNumInOrder = 0, threadNum, blockNum;
 		for (i = 0; i < nodesNum; i++) {
-			newScore += nodeScore[i];
+			parentSetNumInOrder = getParentSetNumInOrder(i);
+			threadNum = getThreadNum(parentSetNumInOrder);
+			blockNum = getBlockNum(parentSetNumInOrder, threadNum);
+
+			if (iter == 0) {
+				printf(
+						"calcOrderScore %d iter: parentSetNumInOrder = %d, threadNum = %d, blockNum = %d.\n",
+						i, parentSetNumInOrder, threadNum, blockNum);
+			}
+
+			calcOrderScore_kernel<<<blockNum, threadNum, threadNum * 8>>>(
+					dev_lsTable, dev_order, dev_nodeScore, dev_parentSet,
+					allParentSetNumPerNode, nodesNum, i, parentSetNumInOrder);
+
+			CUDA_CHECK_RETURN(
+					cudaMemcpy(nodeScore, dev_nodeScore,
+							blockNum * sizeof(double), cudaMemcpyDeviceToHost),
+					"dev_nodeScore -> nodeScore failed.");
+			double max = -DBL_MAX;
+			int maxId = -1;
+			for (j = 0; j < blockNum; j++) {
+				if (nodeScore[j] > max) {
+					max = nodeScore[j];
+					maxId = j;
+				}
+			}
+			bestNodeScore[newOrder[i] - 1] = max;
+			CUDA_CHECK_RETURN(
+					cudaMemcpy(bestParentSet + (newOrder[i] - 1) * (CONSTRAINTS + 1), dev_parentSet + maxId * (CONSTRAINTS + 1), (CONSTRAINTS + 1) * sizeof(int), cudaMemcpyDeviceToHost),
+					"dev_parentSet -> bestParentSet");
 		}
 
+		// print this new order
+		printf("calculate order[");
+		for (i = 0; i < nodesNum - 1; i++) {
+			printf("%d ", newOrder[i]);
+		}
+		printf("%d] score:\n", newOrder[i]);
+
+		// calclate new order score
+		newScore = 0.0;
+		for (i = 0; i < nodesNum; i++) {
+			//printf("node %d: %f\n", newOrder[i], bestNodeScore[i]);
+			newScore += bestNodeScore[i];
+		}
+		printf("order score: %f\n", newScore);
+
 		// use Metropolis-Hastings rule
+		//printf("use MH rule: \n");
 		srand((unsigned int) time(NULL));
 		double u = rand() / (double) RAND_MAX;
 		if (log(u) < newScore - oldScore) {
 			oldScore = newScore;
 			memcpy(oldOrder, newOrder, nodesNum * sizeof(int));
+			//printf("accept new order.\n");
+		} else {
+			//printf("reject new order. \n");
 		}
 
-		// search for best graph
+		// search best graph
+		//printf("search best graph. \n");
 		if (newScore > globalBestScore) {
 			globalBestScore = newScore;
 			memset(globalBestGraph, 0, nodesNum * nodesNum * sizeof(int));
 
 			for (i = 0; i < nodesNum; i++) {
-				for (j = 1, offset = i * (CONSTRAINTS + 1);
-						j <= bestParentSet[offset]; j++) {
+				for (j = 1, offset = i * (CONSTRAINTS + 1), size =
+						bestParentSet[offset]; j <= size; j++) {
 					globalBestGraph[(bestParentSet[offset + j] - 1) * nodesNum
 							+ i] = 1;
 				}
@@ -226,20 +254,37 @@ void BNSL_start() {
 	CUDA_CHECK_RETURN(cudaFree(dev_order), "dev_order cudaFree failed.");
 	CUDA_CHECK_RETURN(cudaFree(dev_nodeScore),
 			"dev_nodeScore cudaFree failed.");
-	CUDA_CHECK_RETURN(cudaFree(dev_bestParentSet),
+	CUDA_CHECK_RETURN(cudaFree(dev_parentSet),
 			"dev_bestParentSet cudaFree failed.");
 	free(nodeScore);
+	free(bestNodeScore);
+	free(bestParentSet);
 	free(newOrder);
 	free(oldOrder);
-	free(bestParentSet);
 }
 
-void BNSL_finish() {
+__host__ void BNSL_printResult() {
+	printf("Bayesian Network learned:\n");
+	for (int i = 0; i < nodesNum; i++) {
+		for (int j = 0; j < nodesNum; j++) {
+			printf("%d ", globalBestGraph[i * nodesNum + j]);
+		}
+		printf("\n");
+	}
+	printf("Best Score: %f \n", globalBestScore);
+	printf("Best Topology: ");
+	for (int i = 0; i < nodesNum; i++) {
+		printf("%d ", topSort[i]);
+	}
+	printf("\n");
+}
+
+__host__ void BNSL_finish() {
 	free(topSort);
 	free(globalBestGraph);
 }
 
-void readNodeInfo() {
+__host__ void readNodeInfo() {
 	FILE * inFile = fopen(NODEINFO_PATH, "r");
 
 	char cur = fgetc(inFile);
@@ -261,7 +306,7 @@ void readNodeInfo() {
 
 }
 
-void readSamples() {
+__host__ void readSamples() {
 	FILE * inFile = fopen(SAMPLES_PATH, "r");
 	int i, j, value;
 
@@ -286,11 +331,11 @@ void readSamples() {
 	fclose(inFile);
 }
 
-int compare(const void*a, const void*b) {
+__host__ int compare(const void*a, const void*b) {
 	return *(int*) a - *(int*) b;
 }
 
-long C(int n, int m) {
+__host__ long C(int n, int m) {
 
 	if (n > m || n < 0 || m < 0)
 		return -1;
@@ -302,7 +347,7 @@ long C(int n, int m) {
 	return res;
 }
 
-void randInitOrder(int * s) {
+__host__ void randInitOrder(int * s) {
 	for (int i = 0; i < nodesNum; i++) {
 		s[i] = i + 1;
 	}
@@ -316,7 +361,7 @@ void randInitOrder(int * s) {
 	}
 }
 
-void selectTwoNodeToSwap(int *n1, int *n2) {
+__host__ void selectTwoNodeToSwap(int *n1, int *n2) {
 	*n1 = rand() % nodesNum;
 	*n2 = rand() % nodesNum;
 	if (*n1 == *n2) {
@@ -327,7 +372,7 @@ void selectTwoNodeToSwap(int *n1, int *n2) {
 	}
 }
 
-void randSwapTwoNode(int *order) {
+__host__ void randSwapTwoNode(int *order) {
 	int n1 = 0, n2 = 0, temp;
 	selectTwoNodeToSwap(&n1, &n2);
 	temp = order[n1];
@@ -335,7 +380,7 @@ void randSwapTwoNode(int *order) {
 	order[n2] = temp;
 }
 
-int calcValuesMaxNum() {
+__host__ int calcValuesMaxNum() {
 	int * valuesRangeToSort = (int *) malloc(nodesNum * sizeof(int));
 	memcpy(valuesRangeToSort, valuesRange, nodesNum * sizeof(int));
 	qsort(valuesRangeToSort, nodesNum, sizeof(int), compare);
@@ -347,29 +392,55 @@ int calcValuesMaxNum() {
 	return valuesMaxNum;
 }
 
-__global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
-		double * dev_nodeScore, int * dev_bestParentSet, int allParentSetNumPerNode,
-		int nodesNum) {
-
-	int parentSetNumInOrder = 0;
-	int i, s;
-	int curPos = blockIdx.x;
-	int curNode = dev_order[curPos];
+__host__ int getParentSetNumInOrder(int curPos) {
+	int i, parentSetNumInOrder = 0;
 	for (i = 0; i <= CONSTRAINTS && i < curPos + 1; i++) {
-		parentSetNumInOrder += C_kernel(i, curPos);
+		parentSetNumInOrder += C(i, curPos);
 	}
+	return parentSetNumInOrder;
+}
+
+__host__ int getThreadNum(int parentSetNum) {
+	if (parentSetNum <= 32) {
+		return 32;
+	} else if (parentSetNum <= 64) {
+		return 64;
+	} else if (parentSetNum <= 128) {
+		return 128;
+	} else if (parentSetNum <= 256) {
+		return 256;
+	} else if (parentSetNum <= 512) {
+		return 512;
+	} else {
+		return 1024;
+	}
+}
+
+__host__ int getBlockNum(int parentSetNum, int threadNum) {
+	return (parentSetNum - 1) / threadNum + 1;
+}
+
+__global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
+		double * dev_nodeScore, int * dev_bestParentSet,
+		int allParentSetNumPerNode, int nodesNum, int curPos,
+		int parentSetNumInOrder) {
+
+	int i, s;
+	int curNode = dev_order[curPos];
 
 	extern __shared__ double result[];
 	result[threadIdx.x] = -DBL_MAX;
 	__syncthreads();
-	int combi[CONSTRAINTS];
+
+	int combination[CONSTRAINTS];
 	int size = 0;
-	if (threadIdx.x < parentSetNumInOrder) {
-		findComb_kernel(curPos + 1, threadIdx.x, &size, combi);
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id < parentSetNumInOrder) {
+		findComb_kernel(curPos + 1, id, &size, combination);
 
 		int parentSet[CONSTRAINTS];
 		for (i = 0; i < size; i++) {
-			parentSet[i] = dev_order[combi[i] - 1];
+			parentSet[i] = dev_order[combination[i] - 1];
 		}
 
 		sortArray_kernel(parentSet, size);
@@ -385,7 +456,8 @@ __global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
 			index = findIndex_kernel(size, parentSet, nodesNum);
 		}
 
-		result[threadIdx.x] = dev_lsTable[(curNode - 1) * allParentSetNumPerNode + index];
+		result[threadIdx.x] = dev_lsTable[(curNode - 1) * allParentSetNumPerNode
+				+ index];
 	}
 
 	__syncthreads();
@@ -415,14 +487,14 @@ __global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
 	}
 
 	if (threadIdx.x == 0) {
-		dev_nodeScore[curPos] = result[0];
+		dev_nodeScore[blockIdx.x] = result[0];
 	}
 
 	if (threadIdx.x == result[1]) {
-		dev_bestParentSet[(curNode - 1) * (CONSTRAINTS + 1)] = size;
+		dev_bestParentSet[blockIdx.x * (CONSTRAINTS + 1)] = size;
 		for (i = 0; i < size; i++) {
-			dev_bestParentSet[(curNode - 1) * (CONSTRAINTS + 1) + i + 1] =
-					dev_order[combi[i] - 1];
+			dev_bestParentSet[blockIdx.x * (CONSTRAINTS + 1) + i + 1] =
+					dev_order[combination[i] - 1];
 		}
 	}
 }
