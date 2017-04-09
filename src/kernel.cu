@@ -149,10 +149,11 @@ __host__ void BNSL_start() {
 
 	CUDA_CHECK_RETURN(cudaMalloc(&dev_order, nodesNum * sizeof(int)),
 			"dev_order cudaMalloc failed.");
-	CUDA_CHECK_RETURN(cudaMalloc(&dev_nodeScore, 1024 * sizeof(double)),
+	CUDA_CHECK_RETURN(
+			cudaMalloc(&dev_nodeScore, nodesNum * 1024 * sizeof(double)),
 			"dev_nodeScore cudaMalloc failed.");
 	CUDA_CHECK_RETURN(
-			cudaMalloc(&dev_parentSet, 1024 * (CONSTRAINTS + 1) * sizeof(int)),
+			cudaMalloc(&dev_parentSet, nodesNum * 1024 * (CONSTRAINTS + 1) * sizeof(int)),
 			"dev_bestParentSet cudaMalloc failed.");
 
 	int * newOrder = (int *) malloc(sizeof(int) * nodesNum);
@@ -206,13 +207,13 @@ __host__ void BNSL_start() {
 		}
 
 		// print this new order
-		printf("calculate order[");
-		for (i = 0; i < nodesNum - 1; i++) {
-			printf("%d ", newOrder[i]);
-		}
-		printf("%d] score:\n", newOrder[i]);
+//		printf("calculate order[");
+//		for (i = 0; i < nodesNum - 1; i++) {
+//			printf("%d ", newOrder[i]);
+//		}
+//		printf("%d] score:\n", newOrder[i]);
 
-		// calclate new order score
+// calclate new order score
 		newScore = 0.0;
 		for (i = 0; i < nodesNum; i++) {
 			//printf("node %d: %f\n", newOrder[i], bestNodeScore[i]);
