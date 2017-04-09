@@ -283,11 +283,19 @@ __host__ void BNSL_start() {
 			"dev_nodeScore cudaFree failed.");
 	CUDA_CHECK_RETURN(cudaFree(dev_parentSet),
 			"dev_bestParentSet cudaFree failed.");
+	CUDA_CHECK_RETURN(cudaFree(dev_idMap),
+			  "dev_idMap cudaFree failed.");
+	CUDA_CHECK_RETURN(cudaFree(dev_posMap), "dev_posMap cudaFree failed.");
+	CUDA_CHECK_RETURN(cudaFree(dev_parentSetNumForEachNode), "dev_parentSetNumForEachNode cudaFree failed.");
+	
 	free(nodeScore);
+	free(parentSet);
 	free(bestNodeScore);
 	free(bestParentSet);
 	free(blockNumForEachNode);
 	free(parentSetNumForEachNode);
+	free(idMap);
+	free(posMap);
 	free(newOrder);
 	free(oldOrder);
 }
