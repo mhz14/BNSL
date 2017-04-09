@@ -141,26 +141,52 @@ __host__ void BNSL_start() {
 	int * bestParentSet = (int *) malloc(
 			(CONSTRAINTS + 1) * nodesNum * sizeof(int));
 
-	double *nodeScore = (double *) malloc(1024 * sizeof(double));
+	int *blockNumForEachNode = (int *) malloc(nodesNum * sizeof(int));
+	int *parentSetNumForEachNode = (int *) malloc(nodesNum * sizeof(int));
+	int blockNumSum = 0;
+	for (i = 0; i < nodesNum; i++) {
+		parentSetNumForEachNode[i] = getParentSetNumInOrder(i);
+		blockNumForEachNode[i] = getBlockNum(parentSetNumForEachNode[i]);
+		blockNumSum += parentSetNumForEachNode[i];
+	}
+	int *idMap = (int *) malloc(blockNumSum * sizeof(int));
+	int *posMap = (int *) malloc(blockNumSum * sizeof(int));
+	int pos = 0, id = 0;
+	for (i = 0; i < blockNumSum; i++) {
+		if (id < blockNumForEachNode[pos]) {
+			idMap[i] = id;
+			posMap[i] = pos;
+			id++;
+		} else {
+			pos++;
+			id = 0;
+		}
+	}
 
-	int *dev_order;
+	int *dev_idMap, dev_posMap, dev_parentSetNumForEachNode;
+	CUDA_CHECK_RETURN(cudaMalloc(&dev_idMap, blockNumSum * sizeof(int)), "dev_idMap cudaMalloc failed.");
+	CUDA_CHECK_RETURN(cudaMalloc(&dev_posMap, blockNumSum * sizeof(int)), "dev_posMap cudaMalloc failed.");
+	CUDA_CHECK_RETURN(cudaMalloc(&dev_parentSetNumForEachNode, nodesNum * sizeof(int)), "dev_parentSetNumForEachNode cudaMalloc failed.");
+
+	double *nodeScore = (double *) malloc(blockNumSum * sizeof(double));
+	int *parentSet = (int *) malloc(blockNumSum * (CONSTRAINS + 1) * sizeof(int));
 	double *dev_nodeScore;
 	int *dev_parentSet;
-
-	CUDA_CHECK_RETURN(cudaMalloc(&dev_order, nodesNum * sizeof(int)),
-			"dev_order cudaMalloc failed.");
-	CUDA_CHECK_RETURN(
-			cudaMalloc(&dev_nodeScore, nodesNum * 1024 * sizeof(double)),
+	CUDA_CHECK_RETURN(cudaMalloc(&dev_nodeScore, blockNumSum * sizeof(double)),
 			"dev_nodeScore cudaMalloc failed.");
 	CUDA_CHECK_RETURN(
-			cudaMalloc(&dev_parentSet, nodesNum * 1024 * (CONSTRAINTS + 1) * sizeof(int)),
+			cudaMalloc(&dev_parentSet, blockNumSum * (CONSTRAINTS + 1) * sizeof(int)),
 			"dev_bestParentSet cudaMalloc failed.");
+
+	int *dev_order;
+	CUDA_CHECK_RETURN(cudaMalloc(&dev_order, nodesNum * sizeof(int)),
+			"dev_order cudaMalloc failed.");
 
 	int * newOrder = (int *) malloc(sizeof(int) * nodesNum);
 	randInitOrder(newOrder);
 	int * oldOrder = (int *) malloc(sizeof(int) * nodesNum);
 
-	int maxIterNum = 10000;
+	int maxIterNum = 1;
 	for (iter = 1; iter <= maxIterNum; iter++) {
 		printf("iter = %d: \n", iter);
 
@@ -178,13 +204,13 @@ __host__ void BNSL_start() {
 			threadNum = getThreadNum(parentSetNumInOrder);
 			blockNum = getBlockNum(parentSetNumInOrder, threadNum);
 
-			if (iter == 0) {
+			if (iter == 1) {
 				printf(
 						"calcOrderScore %d iter: parentSetNumInOrder = %d, threadNum = %d, blockNum = %d.\n",
 						i, parentSetNumInOrder, threadNum, blockNum);
 			}
 
-			calcOrderScore_kernel<<<blockNum, threadNum, threadNum * 8>>>(
+			calcOrderScore_kernel<<<blockNumSum, 1024, 1024 * 8>>>(
 					dev_lsTable, dev_order, dev_nodeScore, dev_parentSet,
 					allParentSetNumPerNode, nodesNum, i, parentSetNumInOrder);
 
@@ -260,6 +286,8 @@ __host__ void BNSL_start() {
 	free(nodeScore);
 	free(bestNodeScore);
 	free(bestParentSet);
+	free(blockNumForEachNode);
+	free(parentSetNumForEachNode);
 	free(newOrder);
 	free(oldOrder);
 }
@@ -401,24 +429,8 @@ __host__ int getParentSetNumInOrder(int curPos) {
 	return parentSetNumInOrder;
 }
 
-__host__ int getThreadNum(int parentSetNum) {
-	if (parentSetNum <= 32) {
-		return 32;
-	} else if (parentSetNum <= 64) {
-		return 64;
-	} else if (parentSetNum <= 128) {
-		return 128;
-	} else if (parentSetNum <= 256) {
-		return 256;
-	} else if (parentSetNum <= 512) {
-		return 512;
-	} else {
-		return 1024;
-	}
-}
-
-__host__ int getBlockNum(int parentSetNum, int threadNum) {
-	return (parentSetNum - 1) / threadNum + 1;
+__host__ int getBlockNum(int parentSetNum) {
+	return (parentSetNum - 1) / 1024 + 1;
 }
 
 __global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
