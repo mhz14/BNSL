@@ -23,7 +23,7 @@ __host__ void CheckCudaError(cudaError_t err, char const* errMsg);
 #define ALPHA 10.0
 #define GAMMA 0.2
 #define CONSTRAINTS 4
-#define MAX_THREAD_NUM 128
+#define MAX_THREAD_NUM 1024
 
 __device__ int findIndex_kernel(int k, int* combi, int nodesNum);
 __device__ long C_kernel(int n, int m);
@@ -38,8 +38,7 @@ __global__ void calcAllLocalScore_kernel(int *dev_valuesRange,
 		int samplesNum, int nodesNum, int allParentSetNumPerNode,
 		int valuesMaxNum);
 __global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
-		double * dev_nodeScore, int * dev_bestParentSet, int * dev_idMap,
-		int *dev_posMap, int *dev_parentSetNumForEachNode,
+		double * dev_bestNodeScore, int * dev_bestParentSet,
 		int allParentSetNumPerNode, int nodesNum);
 
 __host__ void BNSL_init();

@@ -16,7 +16,7 @@ int* globalBestGraph;
 int* topSort;
 double globalBestScore;
 
-int begin = 0;
+long begin = 0;
 
 int main() {
 
@@ -33,7 +33,7 @@ int main() {
 	calcCPUTimeEnd();
 
 	calcCPUTimeStart("BNSL_printResult:");
-	//BNSL_printResult();
+	BNSL_printResult();
 	calcCPUTimeEnd();
 
 	calcCPUTimeStart("BNSL_finish:");
@@ -137,59 +137,16 @@ __host__ void BNSL_start() {
 	globalBestGraph = (int *) malloc(sizeof(int) * nodesNum * nodesNum);
 	topSort = (int *) malloc(sizeof(int) * nodesNum);
 
+	double *bestNodeScore = (double *) malloc(nodesNum * sizeof(double));
 	int * bestParentSet = (int *) malloc(
-			(CONSTRAINTS + 1) * nodesNum * sizeof(int));
+			nodesNum * (CONSTRAINTS + 1) * sizeof(int));
 
-	int *blockNumForEachNode = (int *) malloc(nodesNum * sizeof(int));
-	int *parentSetNumForEachNode = (int *) malloc(nodesNum * sizeof(int));
-	int blockNumSum = 0;
-	for (i = 0; i < nodesNum; i++) {
-		parentSetNumForEachNode[i] = getParentSetNumInOrder(i);
-		blockNumForEachNode[i] = getBlockNum(parentSetNumForEachNode[i]);
-		blockNumSum += blockNumForEachNode[i];
-	}
-	int *idMap = (int *) malloc(blockNumSum * sizeof(int));
-	int *posMap = (int *) malloc(blockNumSum * sizeof(int));
-	int pos = 0, id = 0;
-	for (i = 0; i < blockNumSum; i++) {
-		idMap[i] = id;
-		posMap[i] = pos;
-		id++;
-		if (id == blockNumForEachNode[pos]) {
-			id = 0;
-			pos++;
-		}
-	}
-
-	int *dev_idMap, *dev_posMap, *dev_parentSetNumForEachNode;
-	CUDA_CHECK_RETURN(cudaMalloc(&dev_idMap, blockNumSum * sizeof(int)),
-			"dev_idMap cudaMalloc failed.");
-	CUDA_CHECK_RETURN(cudaMalloc(&dev_posMap, blockNumSum * sizeof(int)),
-			"dev_posMap cudaMalloc failed.");
-	CUDA_CHECK_RETURN(
-			cudaMalloc(&dev_parentSetNumForEachNode, nodesNum * sizeof(int)),
-			"dev_parentSetNumForEachNode cudaMalloc failed.");
-
-	CUDA_CHECK_RETURN(
-			cudaMemcpy(dev_idMap, idMap, blockNumSum * sizeof(int),
-					cudaMemcpyHostToDevice), "idMap -> dev_idMap failed.");
-	CUDA_CHECK_RETURN(
-			cudaMemcpy(dev_posMap, posMap, blockNumSum * sizeof(int),
-					cudaMemcpyHostToDevice), "posMap -> dev_posMap failed.");
-	CUDA_CHECK_RETURN(
-			cudaMemcpy(dev_parentSetNumForEachNode, parentSetNumForEachNode,
-					nodesNum * sizeof(int), cudaMemcpyHostToDevice),
-			"parentSetNumForEachNode -> dev_parentSetNumForEachNode failed.");
-
-	double *nodeScore = (double *) malloc(blockNumSum * sizeof(double));
-	int *parentSet = (int *) malloc(
-			blockNumSum * (CONSTRAINTS + 1) * sizeof(int));
-	double *dev_nodeScore;
-	int *dev_parentSet;
-	CUDA_CHECK_RETURN(cudaMalloc(&dev_nodeScore, blockNumSum * sizeof(double)),
+	double *dev_bestNodeScore;
+	int *dev_bestParentSet;
+	CUDA_CHECK_RETURN(cudaMalloc(&dev_bestNodeScore, nodesNum * sizeof(double)),
 			"dev_nodeScore cudaMalloc failed.");
 	CUDA_CHECK_RETURN(
-			cudaMalloc(&dev_parentSet, blockNumSum * (CONSTRAINTS + 1) * sizeof(int)),
+			cudaMalloc(&dev_bestParentSet, nodesNum * (CONSTRAINTS + 1) * sizeof(int)),
 			"dev_bestParentSet cudaMalloc failed.");
 
 	int *dev_order;
@@ -200,7 +157,7 @@ __host__ void BNSL_start() {
 	randInitOrder(newOrder);
 	int * oldOrder = (int *) malloc(sizeof(int) * nodesNum);
 
-	int maxIterNum = 1;
+	int maxIterNum = 100;
 	for (iter = 1; iter <= maxIterNum; iter++) {
 		printf("iter = %d: \n", iter);
 
@@ -212,38 +169,25 @@ __host__ void BNSL_start() {
 				"newOrder -> dev_order failed.");
 
 		// use GPU to calculate best parent set for each node
-		calcOrderScore_kernel<<<blockNumSum, MAX_THREAD_NUM, MAX_THREAD_NUM * 8>>>(dev_lsTable,
-				dev_order, dev_nodeScore, dev_parentSet, dev_idMap, dev_posMap,
-				dev_parentSetNumForEachNode, allParentSetNumPerNode, nodesNum);
+		calcOrderScore_kernel<<<nodesNum, MAX_THREAD_NUM, MAX_THREAD_NUM * 8>>>(
+				dev_lsTable, dev_order, dev_bestNodeScore, dev_bestParentSet,
+				allParentSetNumPerNode, nodesNum);
 		CUDA_CHECK_RETURN(cudaGetLastError(),
 				"calcOrderScore_kernel launch failed.");
 
 		CUDA_CHECK_RETURN(
-				cudaMemcpy(nodeScore, dev_nodeScore,
-						blockNumSum * sizeof(double), cudaMemcpyDeviceToHost),
+				cudaMemcpy(bestNodeScore, dev_bestNodeScore,
+						nodesNum * sizeof(double), cudaMemcpyDeviceToHost),
 				"dev_nodeScore -> nodeScore failed.");
 		CUDA_CHECK_RETURN(
-				cudaMemcpy(parentSet, dev_parentSet, blockNumSum * (CONSTRAINTS + 1) * sizeof(int), cudaMemcpyDeviceToHost),
+				cudaMemcpy(bestParentSet, dev_bestParentSet, nodesNum * (CONSTRAINTS + 1) * sizeof(int), cudaMemcpyDeviceToHost),
 				"dev_parentSet -> parentSet failed.");
 
 		// calclate new order score
 		newScore = 0.0;
-		int rangeStart = 0, maxId = -1;
-		double maxValue = -DBL_MAX;
 		for (i = 0; i < nodesNum; i++) {
-			maxValue = -DBL_MAX;
-			for (j = rangeStart, rangeStart += blockNumForEachNode[i];
-					j < rangeStart; j++) {
-				if (nodeScore[j] > maxValue) {
-					maxValue = nodeScore[j];
-					maxId = j;
-				}
-			}
-			newScore += maxValue;
-			//printf("node %d score: %f \n", newOrder[i], maxValue);
-			memcpy(bestParentSet + i * (CONSTRAINTS + 1),
-					parentSet + maxId * (CONSTRAINTS + 1),
-					(CONSTRAINTS + 1) * sizeof(int));
+			printf("node %d score: %f \n", newOrder[i], bestNodeScore[i]);
+			newScore += bestNodeScore[i];
 		}
 		printf("order score: %f\n", newScore);
 
@@ -276,22 +220,13 @@ __host__ void BNSL_start() {
 
 	CUDA_CHECK_RETURN(cudaFree(dev_lsTable), "dev_lsTable cudaFree failed.");
 	CUDA_CHECK_RETURN(cudaFree(dev_order), "dev_order cudaFree failed.");
-	CUDA_CHECK_RETURN(cudaFree(dev_nodeScore),
+	CUDA_CHECK_RETURN(cudaFree(dev_bestNodeScore),
 			"dev_nodeScore cudaFree failed.");
-	CUDA_CHECK_RETURN(cudaFree(dev_parentSet),
+	CUDA_CHECK_RETURN(cudaFree(dev_bestParentSet),
 			"dev_bestParentSet cudaFree failed.");
-	CUDA_CHECK_RETURN(cudaFree(dev_idMap), "dev_idMap cudaFree failed.");
-	CUDA_CHECK_RETURN(cudaFree(dev_posMap), "dev_posMap cudaFree failed.");
-	CUDA_CHECK_RETURN(cudaFree(dev_parentSetNumForEachNode),
-			"dev_parentSetNumForEachNode cudaFree failed.");
 
-	free(nodeScore);
-	free(parentSet);
+	free(bestNodeScore);
 	free(bestParentSet);
-	free(blockNumForEachNode);
-	free(parentSetNumForEachNode);
-	free(idMap);
-	free(posMap);
 	free(newOrder);
 	free(oldOrder);
 }
@@ -438,35 +373,40 @@ __host__ int getBlockNum(int parentSetNum) {
 }
 
 __global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
-		double * dev_nodeScore, int * dev_bestParentSet, int * dev_idMap,
-		int * dev_posMap, int * dev_parentSetNumForEachNode,
+		double * dev_bestNodeScore, int * dev_bestParentSet,
 		int allParentSetNumPerNode, int nodesNum) {
 
-	int i, s;
-	int curPos = dev_posMap[blockIdx.x];
-	int curNode = dev_order[curPos];
-	int blockId = dev_idMap[blockIdx.x];
-	int parentSetNumInOrder = dev_parentSetNumForEachNode[curPos];
+	// curPos = blockIdx.x
+	// curNode = dev_Order[curPos]
+
+	int parentSetNumInOrder = 0;
+	for (int i = 0; i <= CONSTRAINTS && i < blockIdx.x + 1; i++) {
+		parentSetNumInOrder += C_kernel(i, blockIdx.x);
+	}
 
 	extern __shared__ double result[];
 	result[threadIdx.x] = -DBL_MAX;
 	__syncthreads();
 
-	int combination[CONSTRAINTS];
-	int size = 0;
-	int id = blockId * blockDim.x + threadIdx.x;
-	if (id < parentSetNumInOrder) {
-		findComb_kernel(curPos + 1, id, &size, combination);
+	int rangeNum = (parentSetNumInOrder - 1) / blockDim.x + 1;
+	double bestNodeScore = -DBL_MAX;
+	int bestParentSet[CONSTRAINTS], bestParentSetSize;
+	for (int id = threadIdx.x * rangeNum;
+			id < (threadIdx.x + 1) * rangeNum && id < parentSetNumInOrder;
+			id++) {
+		int combination[CONSTRAINTS];
+		int size = 0;
+		findComb_kernel(blockIdx.x + 1, id, &size, combination);
 
 		int parentSet[CONSTRAINTS];
-		for (i = 0; i < size; i++) {
+		for (int i = 0; i < size; i++) {
 			parentSet[i] = dev_order[combination[i] - 1];
 		}
 
 		sortArray_kernel(parentSet, size);
 
-		for (i = 0; i < size; i++) {
-			if (parentSet[i] > curNode) {
+		for (int i = 0; i < size; i++) {
+			if (parentSet[i] > dev_order[blockIdx.x]) {
 				parentSet[i] -= 1;
 			}
 		}
@@ -476,13 +416,21 @@ __global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
 			index = findIndex_kernel(size, parentSet, nodesNum);
 		}
 
-		result[threadIdx.x] = dev_lsTable[(curNode - 1) * allParentSetNumPerNode
-				+ index];
+		double nodeScore = dev_lsTable[(dev_order[blockIdx.x] - 1)
+				* allParentSetNumPerNode + index];
+		if (nodeScore > bestNodeScore) {
+			bestNodeScore = nodeScore;
+			for (int i = 0; i < size; i++) {
+				bestParentSet[i] = combination[i];
+			}
+			bestParentSetSize = size;
+		}
 	}
 
+	result[threadIdx.x] = bestNodeScore;
 	__syncthreads();
 
-	s = blockDim.x / 2;
+	int s = blockDim.x / 2;
 	if (threadIdx.x < s) {
 		if (result[threadIdx.x] >= result[threadIdx.x + s]) {
 			result[threadIdx.x + s] = threadIdx.x;
@@ -507,14 +455,14 @@ __global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
 	}
 
 	if (threadIdx.x == 0) {
-		dev_nodeScore[blockIdx.x] = result[0];
+		dev_bestNodeScore[blockIdx.x] = result[0];
 	}
 
 	if (threadIdx.x == result[1]) {
-		dev_bestParentSet[blockIdx.x * (CONSTRAINTS + 1)] = size;
-		for (i = 0; i < size; i++) {
+		dev_bestParentSet[blockIdx.x * (CONSTRAINTS + 1)] = bestParentSetSize;
+		for (int i = 0; i < bestParentSetSize; i++) {
 			dev_bestParentSet[blockIdx.x * (CONSTRAINTS + 1) + i + 1] =
-					dev_order[combination[i] - 1];
+					dev_order[bestParentSet[i] - 1];
 		}
 	}
 }
