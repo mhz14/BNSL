@@ -23,13 +23,14 @@ __host__ void CheckCudaError(cudaError_t err, char const* errMsg);
 #define ALPHA 10.0
 #define GAMMA 0.2
 #define CONSTRAINTS 4
+#define MAX_THREAD_NUM 128
 
 __device__ int findIndex_kernel(int k, int* combi, int nodesNum);
 __device__ long C_kernel(int n, int m);
 __device__ void recoverComb_kernel(int vi, int* combi, int size);
 __device__ void findComb_kernel(int nodesNum, int index, int* size, int* combi);
 __device__ void sortArray_kernel(int * s, int n);
-__device__ double calLocalScore_kernel(int * dev_valuesRange,
+__device__ double calcLocalScore_kernel(int * dev_valuesRange,
 		int *dev_samplesValues, int *dev_N, int samplesNum, int size,
 		int* parentSet, int curNode, int nodesNum, int valuesMaxNum);
 __global__ void calcAllLocalScore_kernel(int *dev_valuesRange,
@@ -37,9 +38,9 @@ __global__ void calcAllLocalScore_kernel(int *dev_valuesRange,
 		int samplesNum, int nodesNum, int allParentSetNumPerNode,
 		int valuesMaxNum);
 __global__ void calcOrderScore_kernel(double * dev_lsTable, int * dev_order,
-		double * dev_nodeScore, int * dev_bestParentSet,
-		int allParentSetNumPerNode, int nodesNum, int curPos,
-		int parentSetNumInOrder);
+		double * dev_nodeScore, int * dev_bestParentSet, int * dev_idMap,
+		int *dev_posMap, int *dev_parentSetNumForEachNode,
+		int allParentSetNumPerNode, int nodesNum);
 
 __host__ void BNSL_init();
 __host__ void BNSL_calcLocalScore();
@@ -59,8 +60,7 @@ __host__ int calcValuesMaxNum();
 __host__ void calcCPUTimeStart(char const *message);
 __host__ void calcCPUTimeEnd();
 
-__host__ int getThreadNum(int parentSetNum);
-__host__ int getBlockNum(int parentSetNum, int threadNum);
+__host__ int getBlockNum(int parentSetNum);
 __host__ int getParentSetNumInOrder(int curPos);
 
 #endif /* BNSL_BASE_CUH_ */
